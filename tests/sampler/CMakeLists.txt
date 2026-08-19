@@ -1,0 +1,39 @@
+# tests/sampler — tests reales del núcleo sampler (Fase C): nota ->
+# audio real, release -> silencio, polifonía con voice-stealing,
+# resolución de mapeo por rango de nota/velocity.
+
+cmake_minimum_required(VERSION 3.22.1)
+project(olysf2sampler_sampler_tests LANGUAGES CXX)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../native ${CMAKE_CURRENT_BINARY_DIR}/olysf2sampler_native)
+
+add_executable(olysf2sampler_sampler_test real_sampler_test.cpp)
+target_link_libraries(olysf2sampler_sampler_test PRIVATE olysf2sampler_sampler)
+
+add_executable(olysf2sampler_voice_filter_test voice_filter_test.cpp)
+target_link_libraries(olysf2sampler_voice_filter_test PRIVATE olysf2sampler_sampler)
+
+find_package(Threads REQUIRED)
+add_executable(olysf2sampler_concurrent_render_test concurrent_render_test.cpp)
+target_link_libraries(olysf2sampler_concurrent_render_test PRIVATE olysf2sampler_sampler Threads::Threads)
+
+add_executable(olysf2sampler_voice_manager_stale_handle_test voice_manager_stale_handle_test.cpp)
+target_link_libraries(olysf2sampler_voice_manager_stale_handle_test PRIVATE olysf2sampler_sampler)
+
+add_executable(olysf2sampler_layer_orphan_test layer_orphan_test.cpp)
+target_link_libraries(olysf2sampler_layer_orphan_test PRIVATE olysf2sampler_sampler)
+
+add_executable(olysf2sampler_queue_overflow_diagnostics_test queue_overflow_diagnostics_test.cpp)
+target_link_libraries(olysf2sampler_queue_overflow_diagnostics_test PRIVATE olysf2sampler_sampler)
+
+add_executable(olysf2sampler_loop_engine_edge_cases_test loop_engine_edge_cases_test.cpp)
+target_link_libraries(olysf2sampler_loop_engine_edge_cases_test PRIVATE olysf2sampler_sampler)
+
+enable_testing()
+add_test(NAME olysf2sampler_sampler_test COMMAND olysf2sampler_sampler_test)
+add_test(NAME olysf2sampler_voice_filter_test COMMAND olysf2sampler_voice_filter_test)
+add_test(NAME olysf2sampler_concurrent_render_test COMMAND olysf2sampler_concurrent_render_test)
+add_test(NAME olysf2sampler_voice_manager_stale_handle_test COMMAND olysf2sampler_voice_manager_stale_handle_test)
+add_test(NAME olysf2sampler_layer_orphan_test COMMAND olysf2sampler_layer_orphan_test)
+add_test(NAME olysf2sampler_queue_overflow_diagnostics_test COMMAND olysf2sampler_queue_overflow_diagnostics_test)
+add_test(NAME olysf2sampler_loop_engine_edge_cases_test COMMAND olysf2sampler_loop_engine_edge_cases_test)
