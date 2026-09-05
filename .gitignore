@@ -1,0 +1,15 @@
+# Build outputs
+*.iml
+.gradle/
+build/
+.cxx/
+local.properties
+captures/
+.externalNativeBuild/
+
+# IDE
+.idea/
+*.hprof
+
+# macOS
+.DS_Store
