@@ -1,0 +1,282 @@
+name: Build OlySf2 Sampler
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android NDK + CMake
+        run: |
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=${ANDROID_HOME} \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Set up Gradle (sin wrapper — instala Gradle directamente)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build :api (Kotlin + C++ nativo vía NDK/CMake)
+        run: gradle :api:build --stacktrace
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+
+      - name: Upload AAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: olysf2sampler-api-aar
+          path: api/build/outputs/aar/*.aar
+          if-no-files-found: warn
+
+  native-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compilar y ejecutar smoke test nativo (host, sin Android)
+        run: |
+          set -e
+          INCLUDES=""
+          for m in core audio dsp sampler soundfont samples midi memory threading scheduler resources diagnostics device platform; do
+            INCLUDES="$INCLUDES -I native/$m/include"
+          done
+          g++ -std=c++20 -Wall -Wextra -Wpedantic $INCLUDES \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp \
+              native/dsp/src/gain.cpp \
+              native/dsp/src/pan.cpp \
+              tests/integration/smoke_test.cpp \
+              -o olysf2sampler_smoke_test
+          ./olysf2sampler_smoke_test
+
+  soundfont-core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Round-trip + fixtures (host, ASan/UBSan)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/soundfont/include \
+              native/core/src/version.cpp \
+              native/soundfont/src/sf2_parser_impl.cpp \
+              native/soundfont/src/sf2_writer_impl.cpp \
+              native/soundfont/src/sf2_validator_impl.cpp \
+              tests/soundfont/roundtrip_test.cpp \
+              -o roundtrip_test
+          ./roundtrip_test
+
+      - name: Fixtures reales en disco (host, ASan/UBSan)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/soundfont/include \
+              native/core/src/version.cpp \
+              native/soundfont/src/sf2_parser_impl.cpp \
+              native/soundfont/src/sf2_validator_impl.cpp \
+              tests/soundfont/fixture_test.cpp \
+              -o fixture_test
+          ./fixture_test
+
+      - name: Fuzz smoke test — 4000 entradas mutadas/aleatorias (ASan/UBSan)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g -O1 \
+              -I native/core/include -I native/soundfont/include \
+              native/core/src/version.cpp \
+              native/soundfont/src/sf2_parser_impl.cpp \
+              tests/soundfont/fuzz_smoke_test.cpp \
+              -o fuzz_smoke_test
+          ./fuzz_smoke_test
+
+  dsp-and-sampler-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: DSP real (envolvente, filtro, LFO, resampler) — ASan/UBSan
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/dsp/include \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              tests/dsp/real_dsp_test.cpp \
+              -o dsp_test
+          ./dsp_test
+
+      - name: Sampler real end-to-end (nota -> audio, release, voice-stealing) — ASan/UBSan
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/dsp/include -I native/sampler/include -I native/threading/include \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              native/sampler/src/voice_impl.cpp native/sampler/src/voice_manager_impl.cpp \
+              native/sampler/src/mapping_impl.cpp native/sampler/src/sampler_engine_impl.cpp \
+              tests/sampler/real_sampler_test.cpp \
+              -o sampler_test
+          ./sampler_test
+
+      - name: Filtro por voz — atenuación medida (ASan/UBSan)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/dsp/include -I native/sampler/include \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              native/sampler/src/voice_impl.cpp \
+              tests/sampler/voice_filter_test.cpp \
+              -o voice_filter_test
+          ./voice_filter_test
+
+      - name: Parámetros en tiempo real (Master Volume, Filter) — ASan/UBSan
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/dsp/include -I native/sampler/include -I native/threading/include \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              native/sampler/src/voice_impl.cpp native/sampler/src/voice_manager_impl.cpp \
+              native/sampler/src/mapping_impl.cpp native/sampler/src/sampler_engine_impl.cpp \
+              tests/sampler/live_parameters_test.cpp \
+              -o live_parameters_test
+          ./live_parameters_test
+
+      - name: AudioEngine con backend de prueba (host, ASan/UBSan)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I native/core/include -I native/platform/include -I native/audio/include \
+              native/audio/src/audio_engine_impl.cpp \
+              tests/audio/audio_engine_test.cpp \
+              -o audio_engine_test
+          ./audio_engine_test
+
+  concurrency-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cola SPSC lock-free — 200k items, 2 hilos reales (ThreadSanitizer)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -pthread -fsanitize=thread -g \
+              -I native/core/include -I native/threading/include \
+              tests/threading/spsc_queue_test.cpp \
+              -o spsc_queue_test
+          ./spsc_queue_test
+
+      - name: SamplerEngine bajo concurrencia real control-thread vs audio-thread (ThreadSanitizer)
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -pthread -fsanitize=thread -g \
+              -I native/core/include -I native/dsp/include -I native/sampler/include -I native/threading/include \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              native/sampler/src/voice_impl.cpp native/sampler/src/voice_manager_impl.cpp \
+              native/sampler/src/mapping_impl.cpp native/sampler/src/sampler_engine_impl.cpp \
+              tests/sampler/concurrent_render_test.cpp \
+              -o concurrent_render_test
+          timeout 90 ./concurrent_render_test
+
+  host-adapter-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build libolysf2sampler_module.so (host) + arnés dlopen()
+        run: |
+          set -e
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fPIC -shared -fsanitize=address,undefined -g \
+              -I native/core/include -I native/dsp/include -I native/sampler/include -I native/threading/include \
+              -I host_adapter/contracts \
+              native/core/src/version.cpp \
+              native/dsp/src/interpolation.cpp native/dsp/src/gain.cpp native/dsp/src/pan.cpp \
+              native/dsp/src/envelope_impl.cpp native/dsp/src/filter_impl.cpp \
+              native/dsp/src/lfo_impl.cpp native/dsp/src/resampler_impl.cpp \
+              native/sampler/src/voice_impl.cpp native/sampler/src/voice_manager_impl.cpp \
+              native/sampler/src/mapping_impl.cpp native/sampler/src/sampler_engine_impl.cpp \
+              host_adapter/src/olyze_module_adapter.cpp \
+              -o libolysf2sampler_module.so
+
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g \
+              -I host_adapter/contracts \
+              host_adapter/tests/host_simulation_harness.cpp \
+              -ldl -o host_harness
+
+      - name: Simular al Host real — dlopen() + ciclo de vida completo (ASan/UBSan)
+        run: ./host_harness ./libolysf2sampler_module.so
+
+  host-adapter-android-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Android NDK + CMake
+        run: |
+          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=${ANDROID_HOME} \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1"
+
+      # Compilación cruzada REAL a arm64-v8a — esto es lo que produce la
+      # .so que de verdad se puede cargar en OlyzeAudioModuleHost en un
+      # teléfono. No usa Gradle/AGP (este target no es una librería
+      # Android normal): invoca CMake directamente con el toolchain del
+      # NDK, igual que cualquier plugin de audio nativo standalone.
+      - name: Compilar libolysf2sampler_module.so para arm64-v8a
+        run: |
+          set -e
+          NDK_HOME="${ANDROID_HOME}/ndk/27.0.12077973"
+          cmake -B build-android -S host_adapter \
+              -DCMAKE_TOOLCHAIN_FILE="${NDK_HOME}/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI=arm64-v8a \
+              -DANDROID_PLATFORM=android-26 \
+              -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-android --target olysf2sampler_module --verbose
+
+      - name: Subir la .so lista para cargar en el Host
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libolysf2sampler_module-arm64-v8a
+          path: build-android/**/libolysf2sampler_module.so
+          if-no-files-found: error
